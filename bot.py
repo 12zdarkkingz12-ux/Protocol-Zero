@@ -657,6 +657,328 @@ async def slash_nuke(interaction: discord.Interaction):
     except Exception:
         pass
 
+# ─────────────── /rebuild ───────────────
+@bot.tree.command(name="rebuild", description="⚠️ حفظ هيكل السيرفر، حذف الرتب والرومات، وإعادة البناء")
+async def slash_rebuild(interaction: discord.Interaction):
+    if interaction.guild.id != ALLOWED_GUILD_ID:
+        return await interaction.response.send_message(
+            embed=embed_error("غير مصرح"), ephemeral=True, **_files()
+        )
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message(
+            embed=embed_error("صلاحيات غير كافية", "تحتاج صلاحية `Administrator`."),
+            ephemeral=True, **_files()
+        )
+
+    guild = interaction.guild
+
+    # ══════════════════════════════════════════
+    # التأكيد المزدوج (ephemeral)
+    # ══════════════════════════════════════════
+    class View1(discord.ui.View):
+        def __init__(self): super().__init__(timeout=30); self.go = False
+
+        @discord.ui.button(label="⚠️ أفهم الخطورة — المتابعة", style=discord.ButtonStyle.danger)
+        async def yes(self, i: discord.Interaction, b: discord.ui.Button):
+            self.go = True; self.stop(); await i.response.defer()
+
+        @discord.ui.button(label="إلغاء", style=discord.ButtonStyle.secondary)
+        async def no(self, i: discord.Interaction, b: discord.ui.Button):
+            self.stop()
+            await i.response.edit_message(
+                embed=embed_info("⛔ إلغاء", "لم يتغير شيء.", color=C.INFO),
+                view=None, **_atts()
+            )
+
+    class View2(discord.ui.View):
+        def __init__(self): super().__init__(timeout=30); self.go = False
+
+        @discord.ui.button(label="💣 تأكيد نهائي — ابدأ الآن", style=discord.ButtonStyle.danger)
+        async def yes(self, i: discord.Interaction, b: discord.ui.Button):
+            self.go = True; self.stop(); await i.response.defer()
+
+        @discord.ui.button(label="إلغاء", style=discord.ButtonStyle.secondary)
+        async def no(self, i: discord.Interaction, b: discord.ui.Button):
+            self.stop()
+            await i.response.edit_message(
+                embed=embed_info("⛔ إلغاء", "لم يتغير شيء.", color=C.INFO),
+                view=None, **_atts()
+            )
+
+    # ── التأكيد الأول ──
+    v1 = View1()
+    await interaction.response.send_message(
+        embed=embed_warning(
+            "⚠️ تحذير — Rebuild Protocol",
+            "**سيتم تنفيذ المراحل التالية بالترتيب:**\n\n"
+            "▸ **حفظ** هيكل الرومات والفئات وترتيبها\n"
+            "▸ **حذف** جميع الرتب التي يملك البوت صلاحية حذفها\n"
+            "▸ **حذف** جميع الرومات والفئات\n"
+            "▸ **إعادة بناء** الرومات والفئات من النسخة المحفوظة\n\n"
+            "⛔ **هذا الإجراء لا يمكن التراجع عنه.**"
+        ),
+        view=v1, ephemeral=True, **_files()
+    )
+    await v1.wait()
+    if not v1.go:
+        return
+
+    # ── التأكيد الثاني ──
+    v2 = View2()
+    await interaction.edit_original_response(
+        embed=embed_warning(
+            "⚠️ تأكيد نهائي — هل أنت متأكد تماماً؟",
+            f"**السيرفر:** `{guild.name}`\n"
+            f"**المُنفِّذ:** {interaction.user.mention}\n\n"
+            "هذه آخر فرصة للإلغاء قبل بدء العملية."
+        ),
+        view=v2, **_atts()
+    )
+    await v2.wait()
+    if not v2.go:
+        return
+
+    await interaction.edit_original_response(
+        embed=embed_warning("🚀 جاري التنفيذ...", "العملية بدأت، لا تغلق ديسكورد."),
+        view=None, **_atts()
+    )
+
+    # ══════════════════════════════════════════
+    # المرحلة 1: حفظ الـ Snapshot
+    # ══════════════════════════════════════════
+    snap_cats: list[dict] = []
+    snap_chs:  list[dict] = []
+
+    for cat in sorted(guild.categories, key=lambda c: c.position):
+        al, dn = cat.overwrites_for(guild.default_role).pair()
+        snap_cats.append({
+            "name":           cat.name,
+            "position":       cat.position,
+            "everyone_allow": al.value,
+            "everyone_deny":  dn.value,
+        })
+
+    for ch in sorted(guild.channels, key=lambda c: c.position):
+        if isinstance(ch, discord.CategoryChannel):
+            continue
+        al, dn = ch.overwrites_for(guild.default_role).pair()
+        entry: dict = {
+            "name":           ch.name,
+            "type":           str(ch.type),
+            "position":       ch.position,
+            "category_name":  ch.category.name if ch.category else None,
+            "everyone_allow": al.value,
+            "everyone_deny":  dn.value,
+        }
+        if isinstance(ch, discord.TextChannel):
+            entry.update(topic=ch.topic or "", slowmode=ch.slowmode_delay, nsfw=ch.is_nsfw())
+        elif isinstance(ch, discord.VoiceChannel):
+            entry.update(bitrate=ch.bitrate, user_limit=ch.user_limit)
+        snap_chs.append(entry)
+
+    # ══════════════════════════════════════════
+    # رسالة الحالة العامة (في روم مؤقت)
+    # ══════════════════════════════════════════
+    temp_ch = next(
+        (c for c in guild.text_channels if c.permissions_for(guild.me).send_messages),
+        None
+    )
+
+    pub_embed = discord.Embed(
+        title="⚡  REBUILD PROTOCOL — INITIATED",
+        color=C.NUKE,
+        timestamp=_ts()
+    )
+    pub_embed.set_footer(text=_footer())
+    if _bot_img:
+        pub_embed.set_thumbnail(url="attachment://bot.jpg")
+
+    def _pub_desc(phase: str) -> str:
+        return f"**المُنفِّذ:** {interaction.user.mention}\n**المرحلة:** {phase}"
+
+    pub_embed.description = _pub_desc("💾  حفظ الهيكل... ✅ تم")
+    pub_msg = None
+    if temp_ch:
+        try:
+            pub_msg = await temp_ch.send(embed=pub_embed, **_files())
+        except Exception:
+            pass
+
+    async def pub_update(phase: str) -> None:
+        if not pub_msg:
+            return
+        pub_embed.description = _pub_desc(phase)
+        try:
+            await pub_msg.edit(embed=pub_embed, **_atts())
+        except Exception:
+            pass
+
+    # ══════════════════════════════════════════
+    # المرحلة 2: حذف الرتب
+    # ══════════════════════════════════════════
+    await pub_update("🗑️  حذف الرتب...")
+
+    bot_top_role             = guild.me.top_role
+    del_roles, fail_roles    = 0, 0
+
+    for role in sorted(guild.roles, key=lambda r: r.position, reverse=True):
+        # تخطّ: @everyone، رتب البوتات (managed)، رتبة البوت نفسه أو أعلى منها
+        if role.is_default() or role.managed or role >= bot_top_role:
+            continue
+        try:
+            await role.delete(reason="Rebuild Protocol")
+            del_roles += 1
+            await asyncio.sleep(0.5)
+        except Exception:
+            fail_roles += 1
+
+    # ══════════════════════════════════════════
+    # المرحلة 3: حذف الرومات والفئات
+    # ══════════════════════════════════════════
+    await pub_update("💥  حذف الرومات والفئات...")
+
+    temp_id = pub_msg.channel.id if pub_msg else -1
+
+    # احذف كل الرومات ما عدا الروم المؤقت اللي فيه رسالة الحالة
+    for ch in list(guild.channels):
+        if ch.id == temp_id:
+            continue
+        try:
+            await ch.delete(reason="Rebuild Protocol")
+            await asyncio.sleep(0.4)
+        except Exception:
+            pass
+
+    # ══════════════════════════════════════════
+    # المرحلة 4أ: إعادة بناء الفئات
+    # ══════════════════════════════════════════
+    await pub_update("🔨  إعادة بناء الفئات...")
+
+    created_cats: dict[str, discord.CategoryChannel] = {}
+
+    for cat_data in snap_cats:
+        try:
+            ow: dict = {}
+            if cat_data["everyone_allow"] or cat_data["everyone_deny"]:
+                ow[guild.default_role] = discord.PermissionOverwrite.from_pair(
+                    discord.Permissions(cat_data["everyone_allow"]),
+                    discord.Permissions(cat_data["everyone_deny"]),
+                )
+            new_cat = await guild.create_category(
+                name=cat_data["name"],
+                overwrites=ow,
+                reason="Rebuild Protocol"
+            )
+            created_cats[cat_data["name"]] = new_cat
+            await asyncio.sleep(0.4)
+        except Exception:
+            pass
+
+    # ══════════════════════════════════════════
+    # المرحلة 4ب: إعادة بناء الرومات
+    # ══════════════════════════════════════════
+    await pub_update("🔨  إعادة بناء الرومات...")
+
+    created_chs = 0
+
+    for ch_data in snap_chs:
+        try:
+            cat = created_cats.get(ch_data["category_name"]) if ch_data["category_name"] else None
+            ow: dict = {}
+            if ch_data["everyone_allow"] or ch_data["everyone_deny"]:
+                ow[guild.default_role] = discord.PermissionOverwrite.from_pair(
+                    discord.Permissions(ch_data["everyone_allow"]),
+                    discord.Permissions(ch_data["everyone_deny"]),
+                )
+            t = ch_data["type"]
+            if t == "text":
+                await guild.create_text_channel(
+                    name=ch_data["name"], category=cat,
+                    topic=ch_data.get("topic", ""),
+                    slowmode_delay=ch_data.get("slowmode", 0),
+                    nsfw=ch_data.get("nsfw", False),
+                    overwrites=ow, reason="Rebuild Protocol"
+                )
+            elif t == "voice":
+                await guild.create_voice_channel(
+                    name=ch_data["name"], category=cat,
+                    bitrate=min(ch_data.get("bitrate", 64000), guild.bitrate_limit),
+                    user_limit=ch_data.get("user_limit", 0),
+                    overwrites=ow, reason="Rebuild Protocol"
+                )
+            elif t == "stage_voice":
+                await guild.create_stage_channel(
+                    name=ch_data["name"], category=cat,
+                    overwrites=ow, reason="Rebuild Protocol"
+                )
+            elif t == "forum":
+                await guild.create_forum(
+                    name=ch_data["name"], category=cat,
+                    overwrites=ow, reason="Rebuild Protocol"
+                )
+            else:
+                # أي نوع ثاني → نصي كـ fallback
+                await guild.create_text_channel(
+                    name=ch_data["name"], category=cat,
+                    overwrites=ow, reason="Rebuild Protocol"
+                )
+            created_chs += 1
+            await asyncio.sleep(0.4)
+        except Exception:
+            pass
+
+    # ══════════════════════════════════════════
+    # النهاية: رسالة إنجاز + حذف الروم المؤقت
+    # ══════════════════════════════════════════
+    final_embed = discord.Embed(
+        title="✅  REBUILD COMPLETE — Protocol Zero",
+        color=C.SUCCESS,
+        timestamp=_ts()
+    )
+    final_embed.add_field(name="📂  فئات أُعيد بناؤها",  value=f"`{len(created_cats)}`", inline=True)
+    final_embed.add_field(name="💬  رومات أُعيد بناؤها", value=f"`{created_chs}`",        inline=True)
+    final_embed.add_field(name="🗑️  رتب محذوفة",         value=f"`{del_roles}`",           inline=True)
+    if fail_roles:
+        final_embed.add_field(
+            name="⚠️  رتب محمية (لم تُحذف)",
+            value=f"`{fail_roles}` (managed أو فوق رتبة البوت)",
+            inline=False
+        )
+    final_embed.add_field(name="👤  المُنفِّذ", value=interaction.user.mention, inline=False)
+    final_embed.set_footer(text=_footer())
+    if _bot_img:
+        final_embed.set_thumbnail(url="attachment://bot.jpg")
+
+    # أرسل رسالة الإنجاز في أول روم نصي جديد (غير الروم المؤقت)
+    new_text_chs = [c for c in guild.text_channels if c.id != temp_id]
+    if new_text_chs:
+        try:
+            await new_text_chs[0].send(embed=final_embed, **_files())
+        except Exception:
+            pass
+
+    # احذف الروم المؤقت
+    if pub_msg:
+        try:
+            await pub_msg.channel.delete(reason="Rebuild Protocol — cleanup")
+        except Exception:
+            pass
+
+    # تقرير DM للمُنفِّذ
+    try:
+        await interaction.user.send(embed=embed_success(
+            "تقرير Rebuild",
+            "تمت عملية إعادة البناء بنجاح ✅",
+            fields=[
+                ("📂 فئات",        f"`{len(created_cats)}`",                        True),
+                ("💬 رومات",       f"`{created_chs}`",                               True),
+                ("🗑️ رتب محذوفة", f"`{del_roles}`",                                  True),
+                ("🕐 التوقيت",     f"`{_ts().strftime('%Y-%m-%d %H:%M UTC')}`",      False),
+            ]
+        ), **_files())
+    except Exception:
+        pass
+
 # ========== خادم الويب ==========
 from flask import Flask, jsonify
 from threading import Thread
