@@ -352,16 +352,15 @@ async def on_guild_join(guild):
 @bot.command(name="clear")
 @commands.has_permissions(administrator=True)
 async def clear_commands(ctx):
-    await ctx.send(embed=embed_info("🗑️  مسح الأوامر", "جاري مسح كل الأوامر المكررة..."), **_files())
+    await ctx.send(embed=embed_info("🗑️  مسح الأوامر", "جاري مسح أوامر السيرفر المكررة..."), **_files())
     try:
         guild = discord.Object(id=ctx.guild.id)
+        # نمسح بس أوامر الـ guild — لا نمس الـ global tree في الذاكرة
         bot.tree.clear_commands(guild=guild)
         await bot.tree.sync(guild=guild)
-        bot.tree.clear_commands(guild=None)
-        await bot.tree.sync()
         await ctx.send(embed=embed_success(
             "تم المسح",
-            "كل الأوامر حُذفت.\nاكتب `!sync` لتسجيلها من جديد."
+            "أوامر السيرفر حُذفت.\nاكتب `!sync` لتسجيلها من جديد."
         ), **_files())
     except Exception as e:
         await ctx.send(embed=embed_error("فشل المسح", str(e)), **_files())
