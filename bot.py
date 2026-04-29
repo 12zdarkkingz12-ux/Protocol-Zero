@@ -5,10 +5,22 @@ from discord import app_commands
 import asyncio
 import os
 import sys
+import traceback
 from datetime import datetime
 from typing import List, Dict
 
-# ------------------- متغيرات البيئة -------------------
+# ========== إصلاح مشكلة audioop في Python 3.13 ==========
+os.environ["DISCORD_INSTANCE_NO_VOICE"] = "true"
+try:
+    import audioop
+except ImportError:
+    try:
+        import audioop_lts as audioop
+        print("✅ تم استخدام audioop-lts كبديل.")
+    except ImportError:
+        print("⚠️ audioop غير متاح، سيتم تعطيل ميزات الصوت.")
+
+# ========== متغيرات البيئة ==========
 TOKEN = os.getenv("DISCORD_TOKEN")
 ALLOWED_GUILD_ID = int(os.getenv("ALLOWED_GUILD_ID", "0"))
 
@@ -19,7 +31,7 @@ if ALLOWED_GUILD_ID == 0:
     print("❌ ALLOWED_GUILD_ID غير موجود", file=sys.stderr)
     sys.exit(1)
 
-# ------------------- إعداد النوايا -------------------
+# ========== إعداد النوايا ==========
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -27,7 +39,7 @@ intents.messages = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ------------------- دوال مساعدة -------------------
+# ========== دوال مساعدة ==========
 def generate_html(messages: List[Dict], channel_name: str) -> str:
     html = f"""<!DOCTYPE html>
 <html>
@@ -46,7 +58,7 @@ def generate_html(messages: List[Dict], channel_name: str) -> str:
     html += "</body></html>"
     return html
 
-# ------------------- الأوامر العادية -------------------
+# ========== الأحداث ==========
 @bot.event
 async def on_ready():
     print(f"✅ شغال: {bot.user}")
@@ -63,7 +75,7 @@ async def on_guild_join(guild):
         await guild.leave()
         print(f"🚫 غادرت {guild.name} (غير مصرح)")
 
-# أمر المزامنة (لتفعيل الأوامر المائلة)
+# ========== أمر المزامنة ==========
 @bot.command(name="sync")
 @commands.has_permissions(manage_messages=True)
 async def sync_commands(ctx):
@@ -78,7 +90,7 @@ async def sync_commands(ctx):
     except Exception as e:
         await ctx.send(f"❌ فشل: {e}")
 
-# ------------------- الأوامر المائلة -------------------
+# ========== الأوامر المائلة ==========
 @bot.tree.command(name="save", description="أرشفة الروم الحالي (HTML)")
 async def slash_save(interaction: discord.Interaction):
     if interaction.guild.id != ALLOWED_GUILD_ID:
@@ -163,28 +175,27 @@ async def slash_nuke(interaction: discord.Interaction):
     await interaction.edit_original_response(content=f"✅ حذف {total} رسالة")
     await interaction.user.send(f"تقرير nuke: {total} رسالة")
 
-# ------------------- خادم الويب لـ Render -------------------
+# ========== خادم الويب لـ Render ==========
 from flask import Flask
 from threading import Thread
 
-app = Flask('')
+web_app = Flask('')
 
-@app.route('/')
+@web_app.route('/')
 def home():
-    return "Bot is running!"
+    return "Bot is alive!"
 
 def run_web():
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    web_app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
 def keep_alive():
-    t = Thread(target=run_web)
-    t.start()
+    Thread(target=run_web).start()
 
-# ------------------- التشغيل -------------------
+# ========== التشغيل ==========
 if __name__ == "__main__":
     keep_alive()
     try:
         bot.run(TOKEN, reconnect=True)
     except Exception as e:
-        print(f"💥 خطأ فادح: {e}", file=sys.stderr)
+        print(f"💥 خطأ: {e}", file=sys.stderr)
         sys.exit(1)
