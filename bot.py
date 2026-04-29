@@ -573,41 +573,31 @@ async def slash_nuke(interaction: discord.Interaction):
     total_deleted = 0
     other_channels = [c for c in channels if c.id != origin_channel.id]
     done = 0
-
-    # Discord يرفض حذف الرسائل الأقدم من 14 يوم بـ bulk
     cutoff = datetime.now(timezone.utc) - timedelta(days=13, hours=23)
-
-    def is_deletable(m: discord.Message) -> bool:
-        return m.created_at >= cutoff
 
     for idx, ch in enumerate(other_channels, start=1):
         try:
-            # فحص وجود رسائل — تخطّي الفاضي فوراً
-            has_messages = False
-            async for _ in ch.history(limit=1):
-                has_messages = True
+            # هل في رسالة واحدة على الأقل أحدث من 14 يوم؟
+            has_recent = False
+            async for _ in ch.history(limit=1, after=cutoff):
+                has_recent = True
                 break
-            if not has_messages:
-                continue
 
-            # purge مع فلتر التاريخ + timeout 25 ثانية
-            try:
-                deleted = await asyncio.wait_for(
-                    ch.purge(limit=2000, check=is_deletable),
-                    timeout=25
-                )
-            except asyncio.TimeoutError:
-                # الروم فيه رسائل قديمة جداً — تخطّاه
-                continue
+            if not has_recent:
+                continue  # فاضي أو رسائله كلها قديمة → تخطّ فوري
 
+            deleted = await ch.purge(
+                limit=2000,
+                check=lambda m: m.created_at >= cutoff
+            )
             total_deleted += len(deleted)
             done += 1
 
-            if public_msg and deleted:
+            if public_msg:
                 public_embed.description = (
                     f"**المُنفِّذ:** {interaction.user.mention}\n"
                     f"**السيرفر:** `{interaction.guild.name}`\n\n"
-                    f"{progress_bar(idx, total_ch)}\n"
+                    f"{progress_bar(done, len(other_channels))}\n"
                     f"`#{ch.name}` — حُذفت `{len(deleted):,}` رسالة\n"
                     f"`{done} روم منظّف`"
                 )
@@ -620,7 +610,7 @@ async def slash_nuke(interaction: discord.Interaction):
         except Exception:
             pass
 
-    # ── مسح الروم الأصلي ──
+    # ── مسح الروم الأصلي (يُحذف معه الرسالة العامة) ──
     try:
         await origin_channel.purge(limit=2000)
     except Exception:
