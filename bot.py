@@ -352,20 +352,16 @@ async def on_guild_join(guild):
 @bot.command(name="clear")
 @commands.has_permissions(administrator=True)
 async def clear_commands(ctx):
-    """يمسح الأوامر من ديسكورد فقط — دون المساس بالذاكرة حتى يشتغل !sync بعدها"""
-    await ctx.send(embed=embed_info("🗑️  مسح الأوامر", "جاري إزالة الأوامر من ديسكورد..."), **_files())
+    await ctx.send(embed=embed_info("🗑️  مسح الأوامر", "جاري مسح كل الأوامر المكررة..."), **_files())
     try:
         guild = discord.Object(id=ctx.guild.id)
-
-        # مسح أوامر السيرفر من ديسكورد (بدون مسح الذاكرة)
         bot.tree.clear_commands(guild=guild)
-        await bot.tree.sync(guild=guild)  # يرسل قائمة فاضية → يحذفها من ديسكورد
-
-        # لا نمسح guild=None من الذاكرة — copy_global_to تحتاجها في !sync
-
+        await bot.tree.sync(guild=guild)
+        bot.tree.clear_commands(guild=None)
+        await bot.tree.sync()
         await ctx.send(embed=embed_success(
             "تم المسح",
-            "الأوامر أُزيلت من ديسكورد.\nاكتب `!sync` لتسجيلها نظيفة."
+            "كل الأوامر حُذفت.\nاكتب `!sync` لتسجيلها من جديد."
         ), **_files())
     except Exception as e:
         await ctx.send(embed=embed_error("فشل المسح", str(e)), **_files())
@@ -373,16 +369,12 @@ async def clear_commands(ctx):
 @bot.command(name="sync")
 @commands.has_permissions(administrator=True)
 async def sync_commands(ctx):
-    """ينسخ الأوامر الـ global للسيرفر ويسجّلها — يعمل حتى بعد !clear"""
     await ctx.send(embed=embed_info("🔄  مزامنة", "جاري تسجيل الأوامر..."), **_files())
     try:
         guild = discord.Object(id=ctx.guild.id)
-
-        # copy_global_to تقرأ الأوامر المعرّفة في الكود (لم تُمسح من الذاكرة)
         bot.tree.copy_global_to(guild=guild)
         synced = await bot.tree.sync(guild=guild)
         names  = ", ".join(f"`/{c.name}`" for c in synced)
-
         await ctx.send(embed=embed_success(
             f"تم تسجيل {len(synced)} أمر",
             f"{names}\n\nأعد تشغيل ديسكورد إذا ما ظهرت."
@@ -580,20 +572,31 @@ async def slash_nuke(interaction: discord.Interaction):
     # ── المسح الفعلي ──
     total_deleted = 0
     other_channels = [c for c in channels if c.id != origin_channel.id]
+    done = 0  # عداد الرومات اللي فيها رسائل فعلاً
 
     for idx, ch in enumerate(other_channels, start=1):
         try:
+            # فحص صحيح بدون .flatten() المهجورة
+            has_messages = False
+            async for _ in ch.history(limit=1):
+                has_messages = True
+                break
+
+            if not has_messages:
+                continue  # روم فاضي → تخطّي فوري بدون انتظار
+
             deleted = await ch.purge(limit=2000)
             total_deleted += len(deleted)
+            done += 1
 
-            # تحديث الرسالة العامة
-            if public_msg:
+            # تحديث فقط إذا حُذف شيء فعلاً
+            if public_msg and deleted:
                 public_embed.description = (
                     f"**المُنفِّذ:** {interaction.user.mention}\n"
                     f"**السيرفر:** `{interaction.guild.name}`\n\n"
                     f"{progress_bar(idx, total_ch)}\n"
                     f"`#{ch.name}` — حُذفت `{len(deleted):,}` رسالة\n"
-                    f"`{idx} / {total_ch - 1} روم مكتمل`"
+                    f"`{done} روم منظّف`"
                 )
                 try:
                     await public_msg.edit(embed=public_embed, **_atts())
