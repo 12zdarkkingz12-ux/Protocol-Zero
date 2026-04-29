@@ -352,16 +352,20 @@ async def on_guild_join(guild):
 @bot.command(name="clear")
 @commands.has_permissions(administrator=True)
 async def clear_commands(ctx):
-    await ctx.send(embed=embed_info("🗑️  مسح الأوامر", "جاري مسح كل الأوامر المكررة..."), **_files())
+    """يمسح الأوامر من ديسكورد فقط — دون المساس بالذاكرة حتى يشتغل !sync بعدها"""
+    await ctx.send(embed=embed_info("🗑️  مسح الأوامر", "جاري إزالة الأوامر من ديسكورد..."), **_files())
     try:
         guild = discord.Object(id=ctx.guild.id)
+
+        # مسح أوامر السيرفر من ديسكورد (بدون مسح الذاكرة)
         bot.tree.clear_commands(guild=guild)
-        await bot.tree.sync(guild=guild)
-        bot.tree.clear_commands(guild=None)
-        await bot.tree.sync()
+        await bot.tree.sync(guild=guild)  # يرسل قائمة فاضية → يحذفها من ديسكورد
+
+        # لا نمسح guild=None من الذاكرة — copy_global_to تحتاجها في !sync
+
         await ctx.send(embed=embed_success(
             "تم المسح",
-            "كل الأوامر حُذفت.\nاكتب `!sync` لتسجيلها من جديد."
+            "الأوامر أُزيلت من ديسكورد.\nاكتب `!sync` لتسجيلها نظيفة."
         ), **_files())
     except Exception as e:
         await ctx.send(embed=embed_error("فشل المسح", str(e)), **_files())
@@ -369,12 +373,16 @@ async def clear_commands(ctx):
 @bot.command(name="sync")
 @commands.has_permissions(administrator=True)
 async def sync_commands(ctx):
+    """ينسخ الأوامر الـ global للسيرفر ويسجّلها — يعمل حتى بعد !clear"""
     await ctx.send(embed=embed_info("🔄  مزامنة", "جاري تسجيل الأوامر..."), **_files())
     try:
         guild = discord.Object(id=ctx.guild.id)
+
+        # copy_global_to تقرأ الأوامر المعرّفة في الكود (لم تُمسح من الذاكرة)
         bot.tree.copy_global_to(guild=guild)
         synced = await bot.tree.sync(guild=guild)
         names  = ", ".join(f"`/{c.name}`" for c in synced)
+
         await ctx.send(embed=embed_success(
             f"تم تسجيل {len(synced)} أمر",
             f"{names}\n\nأعد تشغيل ديسكورد إذا ما ظهرت."
