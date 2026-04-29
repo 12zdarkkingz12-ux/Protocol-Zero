@@ -6,7 +6,7 @@ import asyncio
 import os
 import sys
 import io
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict
 
 # ========== إصلاح مشكلة audioop في Python 3.13 ==========
@@ -572,24 +572,37 @@ async def slash_nuke(interaction: discord.Interaction):
     # ── المسح الفعلي ──
     total_deleted = 0
     other_channels = [c for c in channels if c.id != origin_channel.id]
-    done = 0  # عداد الرومات اللي فيها رسائل فعلاً
+    done = 0
+
+    # Discord يرفض حذف الرسائل الأقدم من 14 يوم بـ bulk
+    cutoff = datetime.now(timezone.utc) - timedelta(days=13, hours=23)
+
+    def is_deletable(m: discord.Message) -> bool:
+        return m.created_at >= cutoff
 
     for idx, ch in enumerate(other_channels, start=1):
         try:
-            # فحص صحيح بدون .flatten() المهجورة
+            # فحص وجود رسائل — تخطّي الفاضي فوراً
             has_messages = False
             async for _ in ch.history(limit=1):
                 has_messages = True
                 break
-
             if not has_messages:
-                continue  # روم فاضي → تخطّي فوري بدون انتظار
+                continue
 
-            deleted = await ch.purge(limit=2000)
+            # purge مع فلتر التاريخ + timeout 25 ثانية
+            try:
+                deleted = await asyncio.wait_for(
+                    ch.purge(limit=2000, check=is_deletable),
+                    timeout=25
+                )
+            except asyncio.TimeoutError:
+                # الروم فيه رسائل قديمة جداً — تخطّاه
+                continue
+
             total_deleted += len(deleted)
             done += 1
 
-            # تحديث فقط إذا حُذف شيء فعلاً
             if public_msg and deleted:
                 public_embed.description = (
                     f"**المُنفِّذ:** {interaction.user.mention}\n"
@@ -607,7 +620,7 @@ async def slash_nuke(interaction: discord.Interaction):
         except Exception:
             pass
 
-    # ── مسح الروم الأصلي (يُحذف معه الرسالة العامة) ──
+    # ── مسح الروم الأصلي ──
     try:
         await origin_channel.purge(limit=2000)
     except Exception:
