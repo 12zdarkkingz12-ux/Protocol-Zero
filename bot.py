@@ -76,10 +76,10 @@ async def on_guild_join(guild):
         print(f"🚫 غادرت {guild.name} (غير مصرح)")
 
 # ========== أمر المزامنة ==========
+# FIX 1: حذف ctx.defer() لأن Context ما عنده هذه الميزة
 @bot.command(name="sync")
 @commands.has_permissions(manage_messages=True)
 async def sync_commands(ctx):
-    await ctx.defer()
     await ctx.send("🔄 جاري تسجيل الأوامر...")
     try:
         guild = discord.Object(id=ctx.guild.id)
@@ -108,7 +108,8 @@ async def slash_save(interaction: discord.Interaction):
             await interaction.edit_original_response(content=f"📀 جمعت {len(msgs)}...")
     await interaction.edit_original_response(content="📄 توليد HTML...")
     html = generate_html(msgs, interaction.channel.name)
-    fn = f"archive_{interaction.channel.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+    # FIX 2: استخدام /tmp/ لضمان الكتابة على Render
+    fn = f"/tmp/archive_{interaction.channel.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
     with open(fn, 'w', encoding='utf-8') as f:
         f.write(html)
     await interaction.edit_original_response(content="📤 إرسال...")
@@ -146,15 +147,18 @@ async def slash_nuke(interaction: discord.Interaction):
         def __init__(self):
             super().__init__(timeout=30)
             self.confirmed = False
+
         @discord.ui.button(label="💣 تأكيد", style=discord.ButtonStyle.danger)
-        async def confirm(self, btn: discord.Interaction, button):
+        async def confirm(self, btn_interaction: discord.Interaction, button: discord.ui.Button):
             self.confirmed = True
             self.stop()
-            await btn.response.edit_message(content="✅ بدء المسح...", view=None)
+            await btn_interaction.response.edit_message(content="✅ بدء المسح...", view=None)
+
+        # FIX 3: إصلاح signature زر الإلغاء
         @discord.ui.button(label="❌ إلغاء", style=discord.ButtonStyle.secondary)
-        async def cancel(self, btn, button):
+        async def cancel(self, btn_interaction: discord.Interaction, button: discord.ui.Button):
             self.stop()
-            await btn.response.edit_message(content="❌ ألغي", view=None)
+            await btn_interaction.response.edit_message(content="❌ ألغي", view=None)
     
     view = Confirm()
     await interaction.response.send_message("⚠️ تحذير: سيمسح آخر 2000 رسالة من كل روم.\nتأكيد؟", view=view, ephemeral=True)
@@ -170,7 +174,7 @@ async def slash_nuke(interaction: discord.Interaction):
             total += len(deleted)
             await interaction.edit_original_response(content=f"💣 {ch.name}: {len(deleted)} ({i+1}/{len(channels)})")
             await asyncio.sleep(1)
-        except:
+        except Exception:
             pass
     await interaction.edit_original_response(content=f"✅ حذف {total} رسالة")
     await interaction.user.send(f"تقرير nuke: {total} رسالة")
